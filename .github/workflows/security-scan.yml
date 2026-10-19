@@ -1,0 +1,45 @@
+# Secret and code scans on every PR. Make the `gitleaks` and `semgrep` checks required in branch
+# protection so a finding blocks the merge. Only what the PR adds is scanned, so findings already on
+# the default branch do not fail every PR. Uses no secrets, so Dependabot PRs run it too.
+name: security-scan
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.30.1
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      # The CLI, not gitleaks-action: the action needs a paid license on organization accounts.
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+      - name: Scan the PR's commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --exit-code 1 --log-opts="$BASE_SHA..$HEAD_SHA" .'
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.179.0
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      # The checkout is the PR's merge commit, and its first parent is the base branch as it is now.
+      # pull_request.base.sha can be older, which would count newer commits on main as the PR's own.
+      - name: Scan what the PR changes
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          semgrep scan --config p/default --baseline-commit "$(git rev-parse HEAD^1)" --error --metrics off
